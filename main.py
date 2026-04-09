@@ -13,7 +13,7 @@ app = FastAPI(title="SAVEMA 1C Driver Industrial API", version="0.1")
 class PrintJob(BaseModel):
     printer_ip: str
     template_name: str
-    static_fields: Dict[str, str]  # {"Text01": "Молоко", ...}
+    static_fields: Dict[str, str]
     codes: List[str]  # Список кодов ЧЗ
 
 
@@ -36,10 +36,10 @@ async def load_template(ip: str, template: str):
     print(f"[*] Инициализация принтера: {ip}")
     print(f"[*] Команда на загрузку шаблона: {template}")
 
-    # Инициализируем драйвер
+
     printer = SavemaIndustrialDriver(ip, 9100)
 
-    # Выполняем команду
+
     res = printer.load_template(template)
 
 
@@ -58,19 +58,19 @@ async def set_printer_fields(ip: str, field1: str, field2: str, field3: str):
 
       """
 
-    # 1. Инициализируем драйвер
+    # стартуем драйвер
     printer = SavemaIndustrialDriver(ip, 9100)
 
-    # 2. Устанавливаем значения
+    # устанавливаем значения
 
     res1 = printer.set_text_variable("Text01", field1)
     res2 = printer.set_text_variable("Text02", field2)
     res3 = printer.set_text_variable("Text03", field3)
 
-    # 3. Собираем ответы в один список
+    # собираем ответы
     responses = [res1, res2, res3]
 
-    # 4. Проверяем
+    # проверяем
     if any("ERR_CONN" in r for r in responses):
         return {
             "status": "error",
@@ -96,7 +96,7 @@ async def set_printer_fields(ip: str, field1: str, field2: str, field3: str):
 #     # 1. Создаем драйвер
 #     # printer = SavemaIndustrialDriver(job.printer_ip, 9100)
 #
-#     # 2. Логика загрузки (наш прошлый скрипт)
+#     # 2. Логика загрузки
 #     print(f"Загружаем шаблон: {job.template_name}")
 #     # printer.load_template(job.template_name)
 #
@@ -111,7 +111,7 @@ async def set_printer_fields(ip: str, field1: str, field2: str, field3: str):
 #     #    printer.start_print()
 #     #    return {"success": True, "message": "Job started", "count": len(job.codes)}
 #
-#     # Пока вернем заглушку для тестов
+#     # вернем заглушку для тестов
 #     return {
 #         "success": True,
 #         "message": f"Задание для {job.printer_ip} принято",
@@ -130,7 +130,7 @@ async def get_printer_telemetry(ip: str):
     status = printer.get_full_status()
     ribbon = printer.get_ribbon_remaining()
     count = printer.get_total_prints()
-    queue = printer.get_capacity("code")  # Наша очередь ЧЗ
+    queue = printer.get_capacity("code")  # очередь ЧЗ
 
     return {
         "ip": ip,
@@ -145,13 +145,13 @@ async def get_printer_telemetry(ip: str):
 async def stop_print(ip: str):
     """
       стопаем печать
-      """
+    """
     printer = SavemaIndustrialDriver(ip, 9100)
 
 
     res = printer.stop_print()
 
-    print(f"[DEBUG] Ответ от принтера: {res}")  # Увидишь, что реально ответила железка
+    print(f"[DEBUG] Ответ от принтера: {res}")
 
     return {
         "ip": ip,
@@ -163,7 +163,7 @@ async def get_queue(ip: str, field: str = "code"):
     """Проверка остатка кодов в принтере"""
     # printer = SavemaIndustrialDriver(ip, 9100)
     # capacity = printer.get_capacity(field)
-    return {"ip": ip, "remaining": 42}  # Тут будет реальный ответ от SPLGMQ
+    return {"ip": ip, "remaining": 42}
 
 
 if __name__ == "__main__":

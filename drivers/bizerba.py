@@ -30,20 +30,30 @@ VAR_SEQ = "GV50"  # Переменная для Индекса (Sequence)
 # ==========================================
 # БЛОК 1: КЛИЕНТ REST API (CONTROL PLANE)
 # ==========================================
-class ConnectBrainClient:
-    def __init__(self, ip, port, user, password):
-        self.base_url = f"http://{ip}:{port}/api/v1"
-        self.session = requests.Session()
-        self.session.auth = (user, password)
-        self.session.headers.update({"Accept": "application/json"})
+def __init__(self, ip: str, port: int = 2020, user: str = "admin", password: str = "admin"):
+    # Строго по мануалу:
+    self.base_url = f"http://{ip}:{port}/ConnectService/json"
+
+    self.session = requests.Session()
+    # Если ConnectService требует Basic Auth:
+    self.session.auth = (user, password)
+    self.session.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
+
 
     def get_scales_ips(self) -> List[Dict[str, str]]:
-        """Получает список устройств и фильтрует только весы (GLP/GLM-I)"""
-        endpoint = f"{self.base_url}/devices"
+        """Получает список устройств из _connect.BRAIN"""
+        # В зависимости от спецификации мануала, получение устройств может быть
+        # реализовано через GET-запрос к конкретному методу, например /GetDevices
+        # Если в мануале указан другой конечный метод, замени 'GetDevices' на нужный.
+        endpoint = f"{self.base_url}/GetDevices"
+
         active_scales = []
 
         try:
             logger.info(f"Запрос конфигурации линии от {endpoint}...")
+
+            # Внимание: WCF сервисы Bizerba иногда требуют POST-запрос даже для получения данных.
+            # Если GET вернет 405 Method Not Allowed, нужно будет поменять на self.session.post()
             response = self.session.get(endpoint, timeout=5.0)
             response.raise_for_status()
 

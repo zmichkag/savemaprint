@@ -38,7 +38,7 @@ async def savema_setjob(ip: str, template: str):
 # ==========================================
 bizerba_router = APIRouter(prefix="/bizerba", tags=["Bizerba"])
 
-# Настройки для BRAIN (из твоего кода)
+# Настройки для BRAIN
 BRAIN_CONFIG = {"ip": "192.168.35.100", "port": 8080, "user": "admin", "pass": "admin"}
 
 

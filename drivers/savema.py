@@ -64,6 +64,22 @@ class SavemaIndustrialDriver:
         """Остаток в очереди"""
         return self._send(f"SPLGMQ{{{field_name}}}")
 
+    def get_full_status(self):
+        # SPPSTA - Основной статус (WAITING, PRINTING, ERROR...)
+        return self._send("SPPSTA")
+
+    def get_ribbon_remaining(self):
+        # SPGGRR - Остаток риббона в процентах
+        return self._send("SPGGRR")
+
+    def get_total_prints(self):
+        # SPGGTP - Общий счетчик оттисков (пробег принтера)
+        return self._send("SPGGTP")
+
+    def get_firmware(self):
+        # SPGGFW - Версия прошивки (проверим те самые 3.18)
+        return self._send("SPGGFW")
+
 
 # --- БОЕВАЯ ЛОГИКА (Тот самый "Оркестратор" в миниатюре) ---
 

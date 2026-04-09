@@ -2,8 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List, Dict
 import uvicorn
-
-# Импортируем твой драйвер (предположим, он в файле driver.py)
+from drivers.savema import SavemaIndustrialDriver
 
 
 app = FastAPI(title="MarkDrive Industrial API", version="0.1")
@@ -56,6 +55,25 @@ async def create_print_job(job: PrintJob):
         "processed_codes": len(job.codes)
     }
 
+
+@app.get("/printer/{ip}/telemetry")
+async def get_printer_telemetry(ip: str):
+    printer = SavemaIndustrialDriver(ip, 9100)
+
+    # Собираем полный пакет данных о здоровье принтера
+    status = printer.get_full_status()
+    ribbon = printer.get_ribbon_remaining()
+    count = printer.get_total_prints()
+    queue = printer.get_capacity("code")  # Наша очередь ЧЗ
+
+    return {
+        "ip": ip,
+        "is_online": "ERR_CONN" not in status,
+        "status": status,
+        "ribbon_left": ribbon,
+        "total_prints": count,
+        "queue_load": queue
+    }
 
 @app.get("/print/queue")
 async def get_queue(ip: str, field: str = "code"):

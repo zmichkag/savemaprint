@@ -2,9 +2,9 @@ import socket
 import time
 
 # --- НАСТРОЙКИ ---
-PRINTER_IP = "192.168.1.100"
+PRINTER_IP = "192.168.35.161"
 PRINTER_PORT = 9100
-TEMPLATE_NAME = "my_label_v1.rox"  # Имя файла на принтере
+TEMPLATE_NAME = "CZDM.rox"  # Имя файла на принтере
 QUEUE_FIELD = "code"  # Поле-источник для Barcode01
 
 
@@ -78,9 +78,10 @@ if __name__ == "__main__":
 
     # 2. Устанавливаем статику (название, партия и т.д.)
     print("[*] Настройка текстовых полей...")
-    printer.set_text_variable("Text01", "Сыр Гауда 45%")
-    printer.set_text_variable("Text02", "Партия: A-255")
-    printer.set_text_variable("Text03", "ГОСТ 32260")
+    printer.set_text_variable("Text01", "A2.C1.L7")
+    printer.set_text_variable("Text02", "09.04.2026")
+    printer.set_text_variable("Text03", "08.07.2026")
+
 
     # 3. Работаем с очередью кодов ЧЗ
     codes_from_1c = [

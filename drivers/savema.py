@@ -64,10 +64,6 @@ class SavemaIndustrialDriver:
         """Остаток в очереди"""
         return self._send(f"SPLGMQ{{{field_name}}}")
 
-    def get_full_status(self):
-        # SPPSTA - Основной статус (WAITING, PRINTING, ERROR...)
-        return self._send("SPPSTA")
-
     def get_ribbon_remaining(self):
         # SPGGRR - Остаток риббона в процентах
         return self._send("SPGGRR")

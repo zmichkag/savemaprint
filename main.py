@@ -3,11 +3,11 @@ from fastapi.responses import HTMLResponse
 from typing import List, Dict
 import uvicorn
 
-# Импортируем твоих "зверей"
+#Импорт драйверов
 from drivers.savema import SavemaIndustrialDriver
 from drivers.bizerba import BizerbaBRAIN2Driver
 
-app = FastAPI(title="MarkDrive Orchestrator v0.2", version="0.2")
+app = FastAPI(title="MarkDrive Orchestrator v0.3", version="0.3")
 
 # Глобальный пул активных драйверов Bizerba (чтобы сокеты не закрывались)
 active_bizerbas: Dict[str, BizerbaBRAIN2Driver] = {}
@@ -29,6 +29,39 @@ async def savema_setjob(ip: str, template: str):
     printer = SavemaIndustrialDriver(ip, 9100)
     res = printer.load_template(template)
     return {"ip": ip, "res": res}
+
+@savema_router.get("/stop")
+async def savema_stop(ip: str):
+    """Стопает печать"""
+    printer = SavemaIndustrialDriver(ip, 9100)
+    res = printer.stop_print()
+    return {"ip": ip, "res": res}
+
+@savema_router.get("/start")
+async def savema_start(ip: str):
+    """Стартует печать"""
+    printer = SavemaIndustrialDriver(ip, 9100)
+    res = printer.start_print()
+    return {"ip": ip, "res": res}
+
+@savema_router.get("/status")
+async def savema_status(ip: str):
+    """Статус принтера"""
+    printer = SavemaIndustrialDriver(ip, 9100)
+    res = printer.get_status()
+    return {"ip": ip, "res": res}
+
+@savema_router.post("/setfield")
+async def savema_setfield(ip: str, field: str, text: str):
+    """Установка статических полей (Text01, Text02 и т.д.)"""
+    printer = SavemaIndustrialDriver(ip, 9100)
+    res = printer.set_text_variable(field, text)
+    return {"ip": ip, "res": res}
+
+
+
+
+
 
 # ==========================================
 # РОУТЕР BIZERBA (/bizerba)

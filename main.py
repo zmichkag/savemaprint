@@ -20,18 +20,31 @@ savema_router = APIRouter(prefix="/savema", tags=["Savema"])
 
 @savema_router.get("/health")
 async def savema_health(ip: str):
+    """"""
     printer = SavemaIndustrialDriver(ip, 9100)
     return {"status": printer.get_status()}
 
 
 @savema_router.post("/setjob")
 async def savema_setjob(ip: str, template: str):
+    """
+    Подгружает нужные шаблоны
+    (в будещем можно бы и отказаться от этого и генерить шаблон на стороне софта
+     тогда можно шаблоны удалить совсем и исключить ручной ввод)
+    :param ip:
+    :param template:
+    :return:
+    """
     printer = SavemaIndustrialDriver(ip, 9100)
     res = printer.load_template(template)
     return {"ip": ip, "res": res}
 
-
-# ... (остальные твои методы setfield, stop переносим сюда аналогично)
+@savema_router.get("/stop")
+async def stop_print(ip: str):
+    """останавливает печать"""
+    printer = SavemaIndustrialDriver(ip, 9100)
+    res = printer.stop_print()
+    return {"ip": ip, "res": res}
 
 # ==========================================
 # РОУТЕР BIZERBA (/bizerba)

@@ -5,12 +5,12 @@ import uvicorn
 
 # Импортируем твоих "зверей"
 from drivers.savema import SavemaIndustrialDriver
-from drivers.bizerba import BizerbaIndustrialDriver
+from drivers.bizerba import BizerbaBRAIN2Driver
 
 app = FastAPI(title="MarkDrive Orchestrator v0.2", version="0.2")
 
 # Глобальный пул активных драйверов Bizerba (чтобы сокеты не закрывались)
-active_bizerbas: Dict[str, BizerbaIndustrialDriver] = {}
+active_bizerbas: Dict[str, BizerbaBRAIN2Driver] = {}
 
 # ==========================================
 # РОУТЕР SAVEMA (/savema)
@@ -39,19 +39,12 @@ bizerba_router = APIRouter(prefix="/bizerba", tags=["Bizerba"])
 BRAIN_CONFIG = {"ip": "192.168.35.100", "port": 8080, "user": "admin", "pass": "admin"}
 
 
-@bizerba_router.get("/list_scales")
-async def list_scales():
-    """Получаем список весов из _connect.BRAIN"""
-    client = ConnectBrainClient(BRAIN_CONFIG["ip"], BRAIN_CONFIG["port"], BRAIN_CONFIG["user"], BRAIN_CONFIG["pass"])
-    scales = client.get_scales_ips()
-    return {"scales": scales}
-
 
 @bizerba_router.post("/start_session")
 async def bizerba_start(ip: str, plu: str, codes: List[str] = Query(None)):
     """Инициализация весов: коннект, PLU и загрузка пачки кодов"""
     if ip not in active_bizerbas:
-        active_bizerbas[ip] = BizerbaIndustrialDriver(ip, 5001)
+        active_bizerbas[ip] = BizerbaBRAIN2Driver(ip, 5001)
         if not active_bizerbas[ip].connect():
             raise HTTPException(status_code=500, detail="Cant connect to Bizerba")
 

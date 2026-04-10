@@ -5,7 +5,7 @@ import uvicorn
 
 # Импортируем твоих "зверей"
 from drivers.savema import SavemaIndustrialDriver
-from drivers.bizerba import BizerbaIndustrialDriver, ConnectBrainClient
+from drivers.bizerba import BizerbaIndustrialDriver
 
 app = FastAPI(title="MarkDrive Orchestrator v0.2", version="0.2")
 

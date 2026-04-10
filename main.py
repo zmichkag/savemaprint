@@ -1,6 +1,7 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from typing import List, Dict
+from pydantic import BaseModel
 import uvicorn
 
 #Импорт драйверов
@@ -12,17 +13,24 @@ app = FastAPI(title="MarkDrive Orchestrator v0.3", version="0.3")
 # Глобальный пул активных драйверов Bizerba (чтобы сокеты не закрывались)
 active_bizerbas: Dict[str, BizerbaBRAIN2Driver] = {}
 
+class PrintJobField(BaseModel):
+    name: str
+    text: str
+
+class PrintJobRequest(BaseModel):
+    ip: str
+    template: str
+    fields: List[PrintJobField]
+
 # ==========================================
 # РОУТЕР SAVEMA (/savema)
 # ==========================================
 savema_router = APIRouter(prefix="/savema", tags=["Savema"])
 
-
 @savema_router.get("/health")
 async def savema_health(ip: str):
     printer = SavemaIndustrialDriver(ip, 9100)
     return {"status": printer.get_status()}
-
 
 @savema_router.post("/setjob")
 async def savema_setjob(ip: str, template: str):
@@ -59,6 +67,51 @@ async def savema_setfield(ip: str, field: str, text: str):
     return {"ip": ip, "res": res}
 
 
+@savema_router.post("/runjob")
+async def savema_runjob(job: PrintJobRequest):
+    """
+    Комплексная загрузка параметров.
+    Принимает JSON с IP, названием шаблона и списком полей для замены.
+    Проверка статуса -> Смена шаблона -> Замена полей -> Старт.
+    """
+    printer = SavemaIndustrialDriver(job.ip, 9100)
+
+    try:
+        # Просим статус
+        status = printer.get_status()
+
+        # Если статус не Ready (например, Printing, Error, Offline) - отбиваем запрос
+        if status.upper() != "READY":
+            return {
+                "status": "error",
+                "message": f"Принтер не готов к смене печати. Status: {status}",
+                "ip": job.ip
+            }
+
+        # Меняем шаблон
+        template_res = printer.load_template(job.template)
+
+        # Меняем текст в полях
+        updated_fields = []
+        for f in job.fields:
+            res = printer.set_text_variable(f.name, f.text)
+            updated_fields.append({"field": f.name, "result": res})
+
+        # Запускаем печать
+        start_res = printer.start_print()
+
+        return {
+            "status": "success",
+            "ip": job.ip,
+            "template": job.template,
+            "template_load_result": template_res,
+            "fields_processed": updated_fields,
+            "start_result": start_res
+        }
+
+    except Exception as e:
+        # Ловим ошибки
+        raise HTTPException(status_code=500, detail=f"Connection error: {str(e)}")
 
 
 

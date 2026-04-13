@@ -8,10 +8,14 @@ import uvicorn
 from drivers.savema import SavemaIndustrialDriver
 from drivers.bizerba import BizerbaBRAIN2Driver
 
-app = FastAPI(title="MarkDrive Orchestrator v0.3", version="0.3")
+app = FastAPI(title="SAVEMA 1C Driver Industrial API v0.3", version="0.3")
 
 # Глобальный пул активных драйверов Bizerba (чтобы сокеты не закрывались)
 active_bizerbas: Dict[str, BizerbaBRAIN2Driver] = {}
+
+class PluChangeRequest(BaseModel):
+    scale_name: str       # Имя весов
+    plu_number: str       # Номер артикула
 
 class PrintJobField(BaseModel):
     name: str
@@ -23,17 +27,19 @@ class PrintJobRequest(BaseModel):
     fields: List[PrintJobField]
 
 # ==========================================
-# РОУТЕР SAVEMA (/savema)
+# (/savema)
 # ==========================================
 savema_router = APIRouter(prefix="/savema", tags=["Savema"])
+
 
 @savema_router.get("/health")
 async def savema_health(ip: str):
     printer = SavemaIndustrialDriver(ip, 9100)
     return {"status": printer.get_status()}
 
-@savema_router.post("/setjob")
+@savema_router.get("/settemplate")
 async def savema_setjob(ip: str, template: str):
+    '''Дергает шаблон по названию '''
     printer = SavemaIndustrialDriver(ip, 9100)
     res = printer.load_template(template)
     return {"ip": ip, "res": res}
@@ -66,7 +72,6 @@ async def savema_setfield(ip: str, field: str, text: str):
     res = printer.set_text_variable(field, text)
     return {"ip": ip, "res": res}
 
-
 @savema_router.post("/runjob")
 async def savema_runjob(job: PrintJobRequest):
     """
@@ -80,7 +85,7 @@ async def savema_runjob(job: PrintJobRequest):
         # Просим статус
         status = printer.get_status()
 
-        # Если статус не Ready (например, Printing, Error, Offline) - отбиваем запрос
+        # Если статус не Ready шлем в лес
         if status.upper() != "READY":
             return {
                 "status": "error",
@@ -122,9 +127,157 @@ async def savema_runjob(job: PrintJobRequest):
 bizerba_router = APIRouter(prefix="/bizerba", tags=["Bizerba"])
 
 # Настройки для BRAIN
-BRAIN_CONFIG = {"ip": "192.168.35.100", "port": 8080, "user": "admin", "pass": "admin"}
+#BRAIN_CONFIG = {"ip": "brain2", "port": 2020, "user": "admin", "pass": "admin"}
 
 
+@bizerba_router.post("/set_plu")
+async def set_plu_endpoint(req: PluChangeRequest):
+    """
+    Эндпоинт для смены артикула (PLU) на указанных весах.
+    """
+    # Инициализируем драйвер для конкретных весов из запроса
+    driver = BizerbaBRAIN2Driver(device_name=req.scale_name)
+
+    # Пытаемся загрузить PLU
+    success = driver.load_plu(req.plu_number)
+    print(success)
+
+    if success:
+        return {
+            "status": "ok",
+            "message": f"Артикул {req.plu_number} успешно загружен на весы {req.scale_name}."
+        }
+    else:
+        # Если сервер Bizerba вернул ошибку, отдаем 500 Internal Server Error
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ошибка смены артикула {req.plu_number} на весах {req.scale_name}. Проверьте логи."
+        )
+
+
+@bizerba_router.get("/easysend")
+async def easysend(scale_name: str, cmd_type: str, command: str, data: str = "0"):
+    """
+    Универсальный и простой поинт для отправки команд.
+    - scale_name: Имя весов (TEST)
+    - cmd_type: 'r' (чтение) или 'w' (запись)
+    - command: Сама команда (GL19, ST01 и т.д.)
+    - data: Значение ('0' для чтения, '12345' для записи)
+    """
+    driver = BizerbaBRAIN2Driver(device_name=scale_name)
+
+    # 1. Формируем префикс Bizerba (A? для чтения, A! для записи)
+    pfx = "A?" if cmd_type.lower() == 'r' else "A!"
+
+    # 2. Собираем итоговое сообщение (например, A?GL19|0)
+    message = f"{pfx}{command}"
+    if data:
+        message += f"|{data}"
+
+    # 3. Готовим параметры запроса для _connectService
+    params = {
+        "connectName": scale_name,
+        "message": f"A?{command}|{data}" if data else f"A?{command}",
+        "timeout": 2000
+    }
+
+    # 4. Шлем GET-запрос (метод _send_get сам подставит params в URL)
+    response = driver._send_get("SendMessage", params=params)
+
+    return {
+        "request": {
+            "scale": scale_name,
+            "generated_message": message
+        },
+        "response": response
+    }
+
+
+@bizerba_router.get("/query")
+async def bizerba_query(scale_name: str, cmd_type: str, command: str, data: str = "0"):
+    """
+    Умный эндпоинт: шлет команду и сразу вычитывает ответ по дескриптору.
+    Пример: /bizerba/query?scale_name=TEST&cmd_type=r&command=GL19&data=0
+    """
+    driver = BizerbaBRAIN2Driver(device_name=scale_name)
+
+    # Выполняем двухэтапный запрос
+    final_res = driver.ask_and_receive(cmd_type, command, data)
+
+    # Извлекаем чистый ответ из поля Response
+    raw_response = final_res.get("Response", "")
+    parsed_value = None
+
+    if "|" in raw_response:
+        parsed_value = raw_response.split("|")[-1]
+
+    return {
+        "scale": scale_name,
+        "raw_response": raw_response,
+        "value": parsed_value,
+        "full_details": final_res
+    }
+
+
+# Словарь для хранения имен очередей, чтобы не создавать их каждый раз
+active_queues: Dict[str, str] = {}
+
+
+@bizerba_router.get("/monitor_line")
+async def monitor_line(scale_name: str):
+    """
+    Эндпоинт для получения 'пачки' весов.
+    При первом вызове создает очередь и ставит фильтр.
+    """
+    driver = BizerbaBRAIN2Driver(device_name=scale_name)
+
+    # 1. Если для этих весов еще нет очереди — создаем
+    if scale_name not in active_queues:
+        q_name = driver.create_queue()
+        if q_name:
+            # Ставим фильтр на PV (данные упаковки/веса) [cite: 163, 170]
+            driver.set_queue_filter(q_name, "PV")
+            active_queues[scale_name] = q_name
+            logger.info(f"Создана выделенная очередь для {scale_name}: {q_name}")
+        else:
+            raise HTTPException(status_code=500, detail="Не удалось создать очередь на сервере")
+
+    # 2. Получаем пачку данных из очереди
+    q_handle = active_queues[scale_name]
+    packets = driver.receive_from_queue(q_handle)
+
+    # 3. Парсим пачку (пример упрощенный)
+    results = []
+    for p in packets:
+        # В телеграмме PV обычно вес идет в определенной позиции
+        # Для теста просто отдаем сырую строку
+        results.append({
+            "raw": p,
+            "timestamp": time.time()
+        })
+
+    return {
+        "scale": scale_name,
+        "queue": q_handle,
+        "count": len(results),
+        "data": results
+    }
+
+@bizerba_router.get("/dev_list")
+async def bizerba_getlist():
+    driver = BizerbaBRAIN2Driver()
+
+    # 1. Получаем список весов
+    scales = driver.get_active_scales()
+
+    print("\n--- Доступные весы на линии ---")
+    for scale in scales:
+        type_str = "GLM-I (Автомат)" if scale['type'] == 35 else "GLP (Ручные)"
+        status_str = "🟢 Активны" if scale['is_active'] else "🔴 Отключены"
+
+        print(f"[{scale['name']}] - {type_str} | {status_str}")
+
+    print("-------------------------------\n")
 
 @bizerba_router.post("/start_session")
 async def bizerba_start(ip: str, plu: str, codes: List[str] = Query(None)):
@@ -161,7 +314,7 @@ async def dashboard():
     return """
     <html>
         <head>
-            <title>MarkDrive Dashboard</title>
+            <title>SAVEMA 1C Driver Industrial API Dashboard</title>
             <style>
                 body { font-family: sans-serif; padding: 20px; background: #f4f4f4; }
                 .card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
@@ -171,7 +324,8 @@ async def dashboard():
             </style>
         </head>
         <body>
-            <h1>MarkDrive Orchestrator v0.2</h1>
+            <h1>SAVEMA 1C Driver Industrial API
+ v0.2</h1>
 
             <div class="card">
                 <h2>Управление SAVEMA</h2>

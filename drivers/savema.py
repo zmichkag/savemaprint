@@ -1,11 +1,11 @@
 import socket
 import time
 
-# --- НАСТРОЙКИ ---
+# --- НАСТРОЙКИ переделал, но оставил, вдруг что-то в константу превратится ---
 PRINTER_IP = "192.168.35.161"
 PRINTER_PORT = 9100
 TEMPLATE_NAME = "CZDM.rox"  # Имя файла на принтере
-QUEUE_FIELD = "code"  # Поле-источник для Barcode01
+QUEUE_FIELD = "code"  # Поле-источник для ЧЗ
 
 
 class SavemaIndustrialDriver:
@@ -14,7 +14,7 @@ class SavemaIndustrialDriver:
         self.port = port
 
     def _send(self, cmd_body):
-        """Низкоуровневая отправка команды"""
+        """ непосредственно отправка """
         full_command = f"~{cmd_body}^"
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -26,14 +26,14 @@ class SavemaIndustrialDriver:
         except Exception as e:
             return f"ERR_CONN: {e}"
 
-    # --- Слой команд управления ---
+    # --- Слой управлния ---
 
     def load_template(self, template_name):
         """Загрузка конкретного шаблона из памяти принтера"""
         return self._send(f"SPLLTF{{{template_name}}}")
 
     def set_text_variable(self, field_name, value):
-        """Установка статических полей (Text01, Text02 и т.д.)"""
+        """Установка статических полей"""
         # SPMCTV - Change Text Value
         return self._send(f"SPMCTV{{{field_name}~gt~{value}}}")
 
@@ -41,7 +41,7 @@ class SavemaIndustrialDriver:
         """Заливка пачки кодов в очередь"""
         processed_codes = [c.replace("<", "&lt;").replace(">", "&gt;") for c in codes_list]
         data_str = "\n".join(processed_codes)
-        # SPLAMQ - Append Multi Queue
+        # SPLAMQ - Append Multi Queue, нуджна прошивка 3,18, без нее не работает
         return self._send(f"SPLAMQ{{{field_name}~gt~{data_str}}}")
 
     def clear_queue(self, field_name):
@@ -65,37 +65,41 @@ class SavemaIndustrialDriver:
         return self._send(f"SPLGMQ{{{field_name}}}")
 
     def get_ribbon_remaining(self):
-        # SPGGRR - Остаток риббона в процентах
+        # Остаток риббона в процентах
         return self._send("SPGGRR")
 
     def get_total_prints(self):
-        # SPGGTP - Общий счетчик оттисков (пробег принтера)
+        # Общий счетчик оттисков, пробег принтера
         return self._send("SPGGTP")
 
     def get_firmware(self):
-        # SPGGFW - Версия прошивки (проверим те самые 3.18)
+        # Версия прошивки
         return self._send("SPGGFW")
 
 
-# --- БОЕВАЯ ЛОГИКА (Тот самый "Оркестратор" в миниатюре) ---
+# --- БОЕВАЯ ЛОГИКА на прошивке 3,18 это нужно будет в оркестратор переложить ---
 
 if __name__ == "__main__":
     printer = SavemaIndustrialDriver(PRINTER_IP, PRINTER_PORT)
 
     print(f"[*] Проверка принтера... {printer.get_status()}")
 
-    # 1. Загружаем нужный шаблон
+    # Загружаем шаблон с ЧЗ
     print(f"[*] Загрузка шаблона {TEMPLATE_NAME}...")
     printer.load_template(TEMPLATE_NAME)
 
-    # 2. Устанавливаем статику (название, партия и т.д.)
+    # настраиваем строчки
     print("[*] Настройка текстовых полей...")
     printer.set_text_variable("Text01", "A2.C1.L7")
     printer.set_text_variable("Text02", "09.04.2026")
     printer.set_text_variable("Text03", "08.07.2026")
 
-
-    # 3. Работаем с очередью кодов ЧЗ
+    """
+    типа получили коды (по хорошему из нужно в SQLite складывать (или писать сразу из 1С), 
+    а оркестратор берет по Х-штук (нужно смотреть на месте, чтоб и принтер вывозил и пачки слать не по 100шт, 
+    скорость работы 55уп/мин, я думаю от 200 кодов за раз нужно пробовать), шлет в очередь, асинхронно проверяет
+    остаток, докладывает по мере расходования и пишет в базу: напечатано\нет    
+    """
     codes_from_1c = [
         "010461234567890121abc12345!91EE06!92abc1",
         "010461234567890121abc12345!91EE06!92abc2",
@@ -110,12 +114,11 @@ if __name__ == "__main__":
 
     if "OK" in res:
         print("[+] Коды успешно загружены.")
-        # 4. Включаем режим "Авто"
-        print("[!] ВНИМАНИЕ: Запуск режима печати по датчику!")
+        print("[!] ВНИМАНИЕ: Запуск печати")
         printer.start_print()
     else:
         print(f"[-] ОШИБКА загрузки: {res}")
 
-    # 5. Мониторинг
+    # смотрим очередь
     cap = printer.get_capacity(QUEUE_FIELD)
     print(f"[*] Текущая очередь принтера: {cap}")

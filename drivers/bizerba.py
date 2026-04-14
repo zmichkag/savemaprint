@@ -7,10 +7,7 @@ logger = logging.getLogger("BrainServerDriver")
 
 
 class BizerbaBRAIN2Driver:
-    """
-    Драйвер для работы с весами Bizerba через WCF-сервис _connect.BRAIN.
-    Опирается на методы SendMessage и ReceiveMessage (очередь DUSTBIN).
-    """
+    """     Драйвер для работы с весами Bizerba через rest API connect.BRAIN     """
 
     def __init__(self, device_name: str = "TEST"):
 
@@ -24,22 +21,22 @@ class BizerbaBRAIN2Driver:
         })
 
     def _send_get(self, method_name: str, params: dict = None) -> dict:
-        """Отправка GET-запроса с 'сырым' URL для обхода кодировки Bizerba."""
-        # 1. Базовая часть URL
+        """Отправка GET-запроса с сырым URL для обхода кодировки Bizerba."""
+        # базовый URL
         url = f"{self.base_url}/{method_name}"
 
-        # 2. Собираем строку параметров вручную, БЕЗ кодировки спецсимволов
+        # сырая строка, по тому что фаст апи умный а BRAIN умных не любит
         if params:
             query_string = "&".join([f"{k}={v}" for k, v in params.items()])
             full_url = f"{url}?{query_string}"
         else:
             full_url = url
 
-        # 3. Выводим в лог точный URL, который улетает в сеть
+        #на всякий случай смотрим куда ходидли
         logger.info(f"[DEBUG] RAW URL: {full_url}")
 
         try:
-            # Отправляем строку напрямую. Requests не будет ее перекодировать.
+            #отправляем строку
             response = self.session.get(full_url, timeout=5.0)
             response.raise_for_status()
 
@@ -55,29 +52,25 @@ class BizerbaBRAIN2Driver:
             return {}
 
     def receive_message(self, handle: str, timeout: int = 2000) -> dict:
-        """
-        Второй этап: получение данных по дескриптору (handle).
-        """
+        """ Получаем ответ по хэндлу  """
         params = {
             "connectName": self.device_name,
             "handle": handle,
             "timeout": timeout,
-            "sendAck": "true"  # Подтверждаем получение [cite: 116]
+            "sendAck": "true"
         }
-        # Используем метод GET, как в твоем успешном тесте [cite: 32]
+
         return self._send_get("ReceiveMessage", params=params)
 
     def ask_and_receive(self, cmd_type: str, command: str, data: str = "") -> dict:
-        """
-        Полный цикл: SendMessage -> Получение Handle -> ReceiveMessage.
-        """
-        # 1. Формируем команду (например, A?GL19|0)
+        """ Полный контакт: запрос - хендл - ответ         """
+        # Собираем клманду
         pfx = "A?" if cmd_type.lower() == 'r' else "A!"
         message = f"{pfx}{command}"
         if data:
             message += f"|{data}"
 
-        # 2. Этап 1: SendMessage
+        # SendMessage
         logger.info(f"[*] Шаг 1: Отправка команды {message}")
         send_res = self._send_get("SendMessage", params={
             "connectName": self.device_name,
@@ -88,28 +81,27 @@ class BizerbaBRAIN2Driver:
         handle = send_res.get("Response")
         status = send_res.get("Status")
 
-        # Если статус OK или Timeout (но handle пришел), идем за данными [cite: 211]
+        # Если статус OK или Timeout + handle, мсмотрим что там по хендлу (вдруг там что-то важное)
         if handle and (status in [1, 2]):
             logger.info(f"[*] Шаг 2: ReceiveMessage по Handle: {handle}")
 
-            # Небольшая пауза, чтобы весы прожевали команду
+            # даем время подумать
             time.sleep(0.1)
 
-            # Вызываем второй метод для получения реального ответа
+            # шлем хендл, читаем ответ
             return self.receive_message(handle)
 
-            # Если статуса 1 или 2 нет, возвращаем что есть (возможно это уже ошибка или OK)
+            # в любом другом случае, возвращаем ответ.
         return send_res
 
     def create_queue(self) -> str:
-        """Создает именованную очередь для устройства и возвращает её имя."""
+        """Создает очередь """
         params = {"connectName": self.device_name}
         res = self._send_get("CreateReceiveQueue", params=params)
-        # Возвращает имя созданной очереди [cite: 61]
         return res.get("Response", "")
 
     def set_queue_filter(self, queue_name: str, filter_str: str = "PV"):
-        """Настраивает фильтр, чтобы в очередь попадал только вес (PV)[cite: 161, 168]."""
+        """Делаем фильтр - только вес (PV) """
         params = {
             "connectName": self.device_name,
             "queueName": queue_name,
@@ -118,12 +110,12 @@ class BizerbaBRAIN2Driver:
         return self._send_get("SetReceiveQueueFilter", params=params)
 
     def receive_from_queue(self, queue_name: str, timeout: int = 1000) -> list:
-        """Вычитывает пачку накопившихся сообщений из конкретной очереди[cite: 112, 116]."""
+        """читаем очередь"""
         params = {
             "connectName": self.device_name,
             "handle": queue_name,
             "timeout": timeout,
-            "sendAck": "true"  # Подтверждаем получение, чтобы очистить очередь
+            "sendAck": "true"
         }
         res = self._send_get("ReceiveMessage", params=params)
 
@@ -131,7 +123,7 @@ class BizerbaBRAIN2Driver:
         if res.get("Status") in [0, 2]:  # 0 - ОК, 2 - есть еще данные [cite: 211]
             raw_data = res.get("Response", "")
             if raw_data:
-                # Разрезаем пачку на отдельные телеграммы
+                # разбираем очередь.
                 telegrams = [t for t in raw_data.split('\r\n') if t]
 
         return telegrams
@@ -140,8 +132,6 @@ class BizerbaBRAIN2Driver:
         """Обертка для отправки низкоуровневых команд GxNet через SendMessage (GET)."""
         pfx = "!" if type == "w" else "?"
 
-        # Собираем сообщение. Оставляем \r\n, т.к. requests автоматически
-        # закодирует их в %0D%0A для URL, как того требует HTTP.
         message = f"A{pfx}{header}\r\n"
         if data:
             message += f"{data}\r\n"
@@ -152,7 +142,7 @@ class BizerbaBRAIN2Driver:
             "timeout": 2000  # Таймаут в мс
         }
 
-        # Вызываем через GET!
+
         res = self._send_get("SendMessage", params=params)
 
         status = res.get("Status")
@@ -162,9 +152,7 @@ class BizerbaBRAIN2Driver:
         return res
 
     def get_active_scales(self) -> list:
-        """
-        Запрашивает список оборудования через GetConnectInfo и фильтрует только весы.
-        """
+        """         Список устройств         """
         logger.info("Запрос топологии оборудования (GetConnectInfo)...")
 
         raw_data = self._send_get("GetConnectInfo")
@@ -182,7 +170,7 @@ class BizerbaBRAIN2Driver:
             name = dev.get("Name")
             state = dev.get("State")
 
-            # Фильтруем: 19 = GLP, 35 = GLM-I
+            # Фильтруем 19 = GLP, 35 = GLM-I, остальное не трогаем, оно всеравно нихрена не умеет
             if dev_type in [19, 35]:
                 is_active = (state == 0)
 
@@ -193,41 +181,38 @@ class BizerbaBRAIN2Driver:
                     "supports_spontaneous": dev.get("ConnectionWithSpontaneousData", False)
                 })
 
-        logger.info(f"Найдено целевых весов (GLP/GLM-I): {len(target_scales)}")
+        logger.info(f"Найдено весов (GLP/GLM-I): {len(target_scales)}")
         return target_scales
 
     def load_plu(self, plu_number: str) -> bool:
-        """Установка артикула (PLU)."""
+        """Установка PLU"""
         logger.info(f"Запрос на установку PLU {plu_number} для {self.device_name}...")
         header = "LV01|GL19|LX02"
         return self._send_gxnet_command("r", header, plu_number)
 
     def push_code_to_buffer(self, seq_id: str, datamatrix: str) -> bool:
-        """Запись DataMatrix и Индекса в переменные весов."""
+        """Запись ЧЗ и Индекса в бицербы ."""
         header = "LV01|GT05|GV50|LX02"
         data = f"{datamatrix}|{seq_id}"
         logger.info(f"Загрузка кода [ID: {seq_id}] в буфер...")
         return self._send_gxnet_command(header, data)
 
     def poll_weight_telegrams(self) -> list:
-        """
-        Опрос сервера на наличие спонтанных сообщений (оттисков веса).
-        Обращается к системной очереди DUSTBIN.
-        """
+        """  это не работает пока    """
         payload = {
             "connectName": self.device_name,
-            "handle": "DUSTBIN",  # Стандартная очередь для спонтанных данных
-            "timeout": 1000,  # Ждем 1 секунду
-            "sendAck": True  # Подтверждаем получение, чтобы сервер удалил сообщение
+            "handle": "DUSTBIN",
+            "timeout": 1000,
+            "sendAck": True
         }
 
         res = self._send_post("ReceiveMessage", payload)
         telegrams = []
 
-        # Если статус 0 (OK) и есть строка ответа
+        # Если статус 0 + строка ответа
         if res.get("Status") == 0 and res.get("Response"):
             raw_response = res.get("Response")
-            # Разбираем пакеты, разделенные \r\n
+            # Разбираем пакеты
             lines = raw_response.split('\r\n')
             for line in lines:
                 if "PD00" in line and "GV50" in line:

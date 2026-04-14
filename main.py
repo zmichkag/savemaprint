@@ -7,16 +7,20 @@ import uvicorn
 #Импорт драйверов
 from drivers.savema import SavemaIndustrialDriver
 from drivers.bizerba import BizerbaBRAIN2Driver
+from drivers.videojet import VideojetIndustrialDriver
 
-app = FastAPI(title="SAVEMA 1C Driver Industrial API v0.3", version="0.3")
+#инициализация rest aip
+app = FastAPI(title="Universal Industrial Printer Driver API v0.4", version="0.4")
 
-# Глобальный пул активных драйверов Bizerba (чтобы сокеты не закрывались)
+# глобальный пул для бицербы - держим тут все соединения
 active_bizerbas: Dict[str, BizerbaBRAIN2Driver] = {}
 
+# модель для бицерб - не работает, кажется нужно повышать вверсию брейна для нормальной работы
 class PluChangeRequest(BaseModel):
-    scale_name: str       # Имя весов
-    plu_number: str       # Номер артикула
+    scale_name: str
+    plu_number: str
 
+# это чтоб фастапи понимал какой у нас формат json
 class PrintJobField(BaseModel):
     name: str
     text: str
@@ -27,19 +31,21 @@ class PrintJobRequest(BaseModel):
     fields: List[PrintJobField]
 
 # ==========================================
-# (/savema)
+# Тут начинается роутер савема, корень запроса из (/savema)
 # ==========================================
 savema_router = APIRouter(prefix="/savema", tags=["Savema"])
 
 
-@savema_router.get("/health")
-async def savema_health(ip: str):
-    printer = SavemaIndustrialDriver(ip, 9100)
-    return {"status": printer.get_status()}
+@savema_router.get("/health") #заводим точку входа
+async def savema_health(ip: str): #создаем функцию и передаем параметры для работы
+    printer = SavemaIndustrialDriver(ip, 9100) #запускаем класс драйвера, порт всегда один, IP передаем в запросе
+    return {"status": printer.get_status()} #выполняем функцию из класса драйвера (savema.py)
+
+#дальше все одинково:  создаем точку, просим выполнить команды драйвера.
 
 @savema_router.get("/settemplate")
 async def savema_setjob(ip: str, template: str):
-    '''Дергает шаблон по названию '''
+    """Дергает шаблон по названию """
     printer = SavemaIndustrialDriver(ip, 9100)
     res = printer.load_template(template)
     return {"ip": ip, "res": res}
@@ -85,7 +91,7 @@ async def savema_runjob(job: PrintJobRequest):
         # Просим статус
         status = printer.get_status()
 
-        # Если статус не Ready шлем в лес
+        # Если статус не ок шлем в лес
         if status.upper() != "READY":
             return {
                 "status": "error",
@@ -115,10 +121,26 @@ async def savema_runjob(job: PrintJobRequest):
         }
 
     except Exception as e:
-        # Ловим ошибки
+        # тут ошибки
         raise HTTPException(status_code=500, detail=f"Connection error: {str(e)}")
 
+# ==========================================
+# Тут начинается роутер VideoJet, корень запроса из (/videojet)
+# ==========================================
 
+videojet_router = APIRouter(prefix="/videojet", tags=["videojet"])
+
+@videojet_router.get("/status")
+async def check_ver(ip: str):
+    driver = VideojetIndustrialDriver(ip, 3002)
+    res = driver.get_status()
+    return (res)
+
+@videojet_router.get("/capacity")
+async def check_ver(ip: str):
+    driver = VideojetIndustrialDriver(ip, 3002)
+    res = driver.get_capacity()
+    return (res)
 
 
 # ==========================================
@@ -135,7 +157,6 @@ async def set_plu_endpoint(req: PluChangeRequest):
     """
     Эндпоинт для смены артикула (PLU) на указанных весах.
     """
-    # Инициализируем драйвер для конкретных весов из запроса
     driver = BizerbaBRAIN2Driver(device_name=req.scale_name)
 
     # Пытаемся загрузить PLU
@@ -148,7 +169,7 @@ async def set_plu_endpoint(req: PluChangeRequest):
             "message": f"Артикул {req.plu_number} успешно загружен на весы {req.scale_name}."
         }
     else:
-        # Если сервер Bizerba вернул ошибку, отдаем 500 Internal Server Error
+        # Если сервер Bizerba вернул ошибку, отдаем 500
         raise HTTPException(
             status_code=500,
             detail=f"Ошибка смены артикула {req.plu_number} на весах {req.scale_name}. Проверьте логи."
@@ -158,30 +179,30 @@ async def set_plu_endpoint(req: PluChangeRequest):
 @bizerba_router.get("/easysend")
 async def easysend(scale_name: str, cmd_type: str, command: str, data: str = "0"):
     """
-    Универсальный и простой поинт для отправки команд.
-    - scale_name: Имя весов (TEST)
-    - cmd_type: 'r' (чтение) или 'w' (запись)
-    - command: Сама команда (GL19, ST01 и т.д.)
-    - data: Значение ('0' для чтения, '12345' для записи)
+    простой поинт для отправки команд.
+    - scale_name: Имя весов !!!TEST!!!
+    - cmd_type: r - w
+    - command: Сама команда
+    - data: Значение ('0' для чтения)
     """
     driver = BizerbaBRAIN2Driver(device_name=scale_name)
 
-    # 1. Формируем префикс Bizerba (A? для чтения, A! для записи)
+    # Формируем префикс
     pfx = "A?" if cmd_type.lower() == 'r' else "A!"
 
-    # 2. Собираем итоговое сообщение (например, A?GL19|0)
+    # cобираем сообщение
     message = f"{pfx}{command}"
     if data:
         message += f"|{data}"
 
-    # 3. Готовим параметры запроса для _connectService
+    # Готовим параметры
     params = {
         "connectName": scale_name,
         "message": f"A?{command}|{data}" if data else f"A?{command}",
         "timeout": 2000
     }
 
-    # 4. Шлем GET-запрос (метод _send_get сам подставит params в URL)
+    # шлем
     response = driver._send_get("SendMessage", params=params)
 
     return {
@@ -196,15 +217,15 @@ async def easysend(scale_name: str, cmd_type: str, command: str, data: str = "0"
 @bizerba_router.get("/query")
 async def bizerba_query(scale_name: str, cmd_type: str, command: str, data: str = "0"):
     """
-    Умный эндпоинт: шлет команду и сразу вычитывает ответ по дескриптору.
-    Пример: /bizerba/query?scale_name=TEST&cmd_type=r&command=GL19&data=0
+    Умный поинт: шлет команду и сразу читает по хендлу.
+    /bizerba/query?scale_name=TEST&cmd_type=r&command=GL19&data=0
     """
     driver = BizerbaBRAIN2Driver(device_name=scale_name)
 
     # Выполняем двухэтапный запрос
     final_res = driver.ask_and_receive(cmd_type, command, data)
 
-    # Извлекаем чистый ответ из поля Response
+    # Извлекаем ответ из Response
     raw_response = final_res.get("Response", "")
     parsed_value = None
 
@@ -267,7 +288,7 @@ async def monitor_line(scale_name: str):
 async def bizerba_getlist():
     driver = BizerbaBRAIN2Driver()
 
-    # 1. Получаем список весов
+    #список весов
     scales = driver.get_active_scales()
 
     print("\n--- Доступные весы на линии ---")
@@ -279,31 +300,31 @@ async def bizerba_getlist():
 
     print("-------------------------------\n")
 
-@bizerba_router.post("/start_session")
-async def bizerba_start(ip: str, plu: str, codes: List[str] = Query(None)):
-    """Инициализация весов: коннект, PLU и загрузка пачки кодов"""
-    if ip not in active_bizerbas:
-        active_bizerbas[ip] = BizerbaBRAIN2Driver(ip, 5001)
-        if not active_bizerbas[ip].connect():
-            raise HTTPException(status_code=500, detail="Cant connect to Bizerba")
-
-    driver = active_bizerbas[ip]
-    driver.load_plu(plu)
-
-    # Если передали коды - заливаем в буфер
-    if codes:
-        for i, code in enumerate(codes):
-            driver.push_code_to_buffer(str(1000 + i), code)
-
-    return {"status": "session_started", "ip": ip, "plu": plu, "buffer_count": len(codes or [])}
-
-
-@bizerba_router.get("/weights")
-async def get_weights(ip: str):
-    """Забираем накопленные веса из драйвера"""
-    if ip not in active_bizerbas:
-        return {"error": "No active session"}
-    return {"telegrams": active_bizerbas[ip].pop_weights()}
+# @bizerba_router.post("/start_session")
+# async def bizerba_start(ip: str, plu: str, codes: List[str] = Query(None)):
+#     """коннект, PLU и загрузка пачки кодов"""
+#     if ip not in active_bizerbas:
+#         active_bizerbas[ip] = BizerbaBRAIN2Driver(ip, 5001)
+#         if not active_bizerbas[ip].connect():
+#             raise HTTPException(status_code=500, detail="Cant connect to Bizerba")
+#
+#     driver = active_bizerbas[ip]
+#     driver.load_plu(plu)
+#
+#     # Если передали коды - заливаем в буфер
+#     if codes:
+#         for i, code in enumerate(codes):
+#             driver.push_code_to_buffer(str(1000 + i), code)
+#
+#     return {"status": "session_started", "ip": ip, "plu": plu, "buffer_count": len(codes or [])}
+#
+#
+# @bizerba_router.get("/weights")
+# async def get_weights(ip: str):
+#     """Забираем накопленные веса из драйвера"""
+#     if ip not in active_bizerbas:
+#         return {"error": "No active session"}
+#     return {"telegrams": active_bizerbas[ip].pop_weights()}
 
 
 # ==========================================
@@ -327,29 +348,29 @@ async def dashboard():
             <h1>SAVEMA 1C Driver Industrial API
  v0.2</h1>
 
-            <div class="card">
-                <h2>Управление SAVEMA</h2>
-                IP: <input id="s_ip" value="192.168.35.161">
-                Job: <input id="s_job" value="CZDM.rox">
-                <button onclick="fetch('/savema/setjob?ip='+document.getElementById('s_ip').value+'&template='+document.getElementById('s_job').value, {method:'POST'})">Загрузить шаблон</button>
-            </div>
-
-            <div class="card">
-                <h2>Управление BIZERBA</h2>
-                IP: <input id="b_ip" value="192.168.35.162">
-                PLU: <input id="b_plu" value="12345">
-                <button onclick="startBizerba()">Запустить линию</button>
-                <div id="b_status"></div>
-            </div>
-
-            <script>
-                async def startBizerba() {
-                    const ip = document.getElementById('b_ip').value;
-                    const plu = document.getElementById('b_plu').value;
-                    await fetch(`/bizerba/start_session?ip=${ip}&plu=${plu}`, {method:'POST'});
-                    alert('Сессия Bizerba запущена!');
-                }
-            </script>
+            # <div class="card">
+            #     <h2>Управление SAVEMA</h2>
+            #     IP: <input id="s_ip" value="192.168.35.161">
+            #     Job: <input id="s_job" value="CZDM.rox">
+            #     <button onclick="fetch('/savema/setjob?ip='+document.getElementById('s_ip').value+'&template='+document.getElementById('s_job').value, {method:'POST'})">Загрузить шаблон</button>
+            # </div>
+            # 
+            # <div class="card">
+            #     <h2>Управление BIZERBA</h2>
+            #     IP: <input id="b_ip" value="192.168.35.162">
+            #     PLU: <input id="b_plu" value="12345">
+            #     <button onclick="startBizerba()">Запустить линию</button>
+            #     <div id="b_status"></div>
+            # </div>
+            # 
+            # <script>
+            #     async def startBizerba() {
+            #         const ip = document.getElementById('b_ip').value;
+            #         const plu = document.getElementById('b_plu').value;
+            #         await fetch(`/bizerba/start_session?ip=${ip}&plu=${plu}`, {method:'POST'});
+            #         alert('Сессия Bizerba запущена!');
+            #     }
+            # </script>
         </body>
     </html>
     """
@@ -358,6 +379,7 @@ async def dashboard():
 # Подключаем роутеры
 app.include_router(savema_router)
 app.include_router(bizerba_router)
+app.include_router(videojet_router)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

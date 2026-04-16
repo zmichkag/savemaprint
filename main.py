@@ -8,9 +8,10 @@ import uvicorn
 from drivers.savema import SavemaIndustrialDriver
 from drivers.bizerba import BizerbaBRAIN2Driver
 from drivers.videojet import VideojetIndustrialDriver
+from drivers.valentin import ValentinIndustrialDriver
 
 #инициализация rest aip
-app = FastAPI(title="Universal Industrial Printer Driver API v0.4", version="0.4")
+app = FastAPI(title="Universal Industrial Printer Driver API v0.5", version="0.5")
 
 # глобальный пул для бицербы - держим тут все соединения
 active_bizerbas: Dict[str, BizerbaBRAIN2Driver] = {}
@@ -31,15 +32,33 @@ class PrintJobRequest(BaseModel):
     fields: List[PrintJobField]
 
 # ==========================================
+# Тут начинается роутер valentin, корень запроса из (/valentin)
+# ==========================================
+valentin_router = APIRouter(prefix="/valentin", tags=["Valentin"])
+@valentin_router.get("/status")
+async def valentin_status(ip: str):
+    """Статус принтера"""
+    printer = ValentinIndustrialDriver(ip, 9100)
+    res = printer.get_status()
+    return {"ip": ip, "res": res}
+
+# ==========================================
 # Тут начинается роутер савема, корень запроса из (/savema)
 # ==========================================
 savema_router = APIRouter(prefix="/savema", tags=["Savema"])
 
+@valentin_router.get("/status")
+async def valentin_status(ip: str):
+    """Статус принтера"""
+    printer = SavemaIndustrialDriver(ip, 9100)
+    res = printer.get_status()
+    return {"ip": ip, "res": res}
 
-@savema_router.get("/health") #заводим точку входа
-async def savema_health(ip: str): #создаем функцию и передаем параметры для работы
-    printer = SavemaIndustrialDriver(ip, 9100) #запускаем класс драйвера, порт всегда один, IP передаем в запросе
-    return {"status": printer.get_status()} #выполняем функцию из класса драйвера (savema.py)
+
+# @savema_router.get("/health") #заводим точку входа
+# async def savema_health(ip: str): #создаем функцию и передаем параметры для работы
+#     printer = SavemaIndustrialDriver(ip, 9100) #запускаем класс драйвера, порт всегда один, IP передаем в запросе
+#     return {"status": printer.get_status()} #выполняем функцию из класса драйвера (savema.py)
 
 #дальше все одинково:  создаем точку, просим выполнить команды драйвера.
 
@@ -380,6 +399,7 @@ async def dashboard():
 app.include_router(savema_router)
 app.include_router(bizerba_router)
 app.include_router(videojet_router)
+app.include_router(valentin_router)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

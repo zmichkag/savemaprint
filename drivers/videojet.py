@@ -86,14 +86,52 @@ class VideojetIndustrialDriver:
         return self._send("SST|4|")
 
     def get_status(self):
-        """Статус принтера"""
-        # GST возвращает STS|<overallstate>|<errorstate>|<currentjob>|<batchcount>|<totalcount>|
-        return self._send("GST")
+        """Запрашивает статус и расшифровывает его согласно протоколу Zipher"""
+        raw_response = self._send("GST")
+
+        # Словари для расшифровки согласно спецификации [cite: 3916, 3950]
+        overall_map = {
+            "0": "Shut down",
+            "1": "Starting up",
+            "2": "Shutting down",
+            "3": "Running",
+            "4": "Offline"
+        }
+
+        error_map = {
+            "0": "No errors",
+            "1": "Warnings present",
+            "2": "Faults present"
+        }
+
+        if raw_response.startswith("STS|"):
+            parts = raw_response.split('|')
+            # Проверяем, что пришло достаточно данных [cite: 3944]
+            if len(parts) >= 6:
+                return {
+                    "raw": raw_response,
+                    "parsed": {
+                        "state_code": parts[1],
+                        "state_desc": overall_map.get(parts[1], "Unknown"),
+                        "error_code": parts[2],
+                        "error_desc": error_map.get(parts[2], "Unknown"),
+                        "current_job": parts[3],
+                        "batch_count": parts[4],
+                        "total_count": parts[5]
+                    }
+                }
+
+        return {"raw": raw_response, "parsed": None, "error": "Invalid response format"}
 
     def get_capacity(self):
         """Размер текущей очереди принтера"""
         # QLN возвращает QLN|<size>|<status>| (где status 3 = очередь полная)
         return self._send("QLN")
+
+    def clear_faults(self):
+        """Квитирование (сброс) ошибок"""
+        # Команда CAF (Clear All Faults)
+        return self._send("CAF")
 
     def get_ribbon_remaining(self):
         """Остаток риббона"""

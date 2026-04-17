@@ -1,7 +1,9 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from typing import List, Dict
-from pydantic import BaseModel
+from typing import List, Optional
+from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException
 import uvicorn
 
 #Импорт драйверов
@@ -35,6 +37,7 @@ class PrintJobRequest(BaseModel):
 # Тут начинается роутер valentin, корень запроса из (/valentin)
 # ==========================================
 valentin_router = APIRouter(prefix="/valentin", tags=["Valentin"])
+
 @valentin_router.get("/status")
 async def valentin_status(ip: str):
     """Статус принтера"""
@@ -42,18 +45,75 @@ async def valentin_status(ip: str):
     res = printer.get_status()
     return {"ip": ip, "res": res}
 
+@valentin_router.get("/ls")
+async def valentin_ls(ip: str):
+    printer = ValentinIndustrialDriver(ip, 9100)
+    res = printer.get_file_list()
+    return {res}
+
+
+# Модель данных для запроса
+class ValentinBatchRequest(BaseModel):
+    ip: str
+    article: str
+    codes: List[str]
+
+
+@valentin_router.post("/batch")
+async def valentin_batch_print(job: ValentinBatchRequest):
+    """
+    Печать пачки кодов.
+    Принимает JSON: {"ip": "...", "article": "Молоко", "codes": ["code1", "code2"]}
+    {
+  "ip": "192.168.35.15",
+  "article": "КОлбаса",
+  "codes": [
+    "010460123456789021ABC123",
+    "010460123456789021ABC456",
+    "010460123456789021ABC789"
+  ]
+}
+    """
+    printer = ValentinIndustrialDriver(job.ip, 9100)
+
+    # Вызываем наш метод.
+    # Так как драйвер синхронный, в идеале обернуть в run_in_threadpool,
+    # но для тестов в пром-контуре можно и так:
+    res = printer.print_batch(job.article, job.codes)
+
+    if "ERR" in res:
+        return {"status": "error", "message": res, "ip": job.ip}
+
+    return {
+        "status": "success",
+        "ip": job.ip,
+        "count": len(job.codes),
+        "details": res
+    }
+
+@valentin_router.get("/simple_job")
+async def valentin_simplejob(ip: str):
+    """Статус принтера"""
+    printer = ValentinIndustrialDriver(ip, 9100)
+    res = printer.load_template("A:3819.prn")
+    print(res)
+    # #res1 = printer.start_print(endless=True)
+    #
+    # if res1 == "OK":
+    #     print("Принтер в режиме 'Авто'. Ждем продукт на датчике.")
+
+
 # ==========================================
 # Тут начинается роутер савема, корень запроса из (/savema)
 # ==========================================
 savema_router = APIRouter(prefix="/savema", tags=["Savema"])
 
 @valentin_router.get("/status")
-async def valentin_status(ip: str):
+async def savema_status(ip: str):
     """Статус принтера"""
     printer = SavemaIndustrialDriver(ip, 9100)
     res = printer.get_status()
     return {"ip": ip, "res": res}
-
 
 # @savema_router.get("/health") #заводим точку входа
 # async def savema_health(ip: str): #создаем функцию и передаем параметры для работы
@@ -146,20 +206,114 @@ async def savema_runjob(job: PrintJobRequest):
 # ==========================================
 # Тут начинается роутер VideoJet, корень запроса из (/videojet)
 # ==========================================
-
 videojet_router = APIRouter(prefix="/videojet", tags=["videojet"])
 
+
+class JobRequest(BaseModel):
+    ip: str
+    template_name: str
+
+@videojet_router.post("/set_job")
+async def set_job(req: JobRequest):
+    # Используем драйвер, который мы написали в стиле Savema
+    driver = VideojetIndustrialDriver(req.ip,3002)
+
+    print(f"[*] Запрос на смену шаблона: {req.template_name} для принтера {req.ip}")
+
+    # 1. Загружаем шаблон командой SLA (Select Job with Allocation)
+    res = driver.load_template(req.template_name)
+
+    # Обработка ответов протокола
+    if "ERR_CONN" in res:
+        raise HTTPException(status_code=502, detail=f"Ошибка связи с принтером: {res}")
+
+    if res == "ACK":
+        # После выбора шаблона принтер должен быть в Running для печати
+        # Можно сразу дернуть статус, чтобы подтвердить переход
+        status = driver.get_status()
+        return {
+            "status": "success",
+            "message": f"Шаблон '{req.template_name}' успешно установлен",
+            "printer_response": res,
+            "current_status": status
+        }
+    else:
+        # Если принтер вернул ERR или NACK [cite: 2, 3]
+        return {
+            "status": "error",
+            "message": "Принтер отклонил команду. Проверьте наличие шаблона в памяти.",
+            "printer_response": res
+        }
+
+
+class BatchPrintRequest(BaseModel):
+    ip: str
+    template_name: str = "DM_ONLY"  # Твое имя шаблона на принтере
+    codes: List[str] = Field(..., min_items=3, max_items=3)  # Фиксируем 3 кода
+
+
+@videojet_router.post("/print_cz_batch")
+async def print_cz_batch(req: BatchPrintRequest):
+    driver = VideojetIndustrialDriver(req.ip,3002)
+
+    # 1. Проверяем связь и версию (Handshake)
+    # ver = driver.get_firmware()
+    # if "ERR_CONN" in ver:
+    #     raise HTTPException(status_code=502, detail=f"Нет связи с принтером: {ver}")
+
+    # 2. Выбираем шаблон (SLA) [cite: 7144, 7149]
+    # На всякий случай выбираем его перед каждой пачкой, чтобы быть уверенными в разметке
+    driver.load_template(req.template_name)
+
+    # 3. Очищаем старую очередь (CQI), если нужно начать "с чистого листа" [cite: 7133, 7627, 7636]
+    driver.clear_queue()
+
+    # 4. Заливаем пачку через наш метод append_queue
+    # Внутри он использует JDI|1|Barcode_0=... [cite: 7281, 7283]
+    # Помни: для ЧЗ используй \x1D как разделитель в строках кодов
+    res = driver.append_queue("Barcode_0", req.codes)
+
+    if "OK" in res:
+        # 5. Убеждаемся, что принтер в режиме Running (SST|3|) [cite: 7424, 7437]
+        driver.start_print()
+
+        # Проверяем итоговую длину очереди (QLN) [cite: 8547, 8549]
+        q_status = driver.get_capacity()
+
+        return {
+            "status": "success",
+            "batch_result": res,
+            "queue_info": q_status,
+            "message": "Пачка из 3 кодов успешно поставлена в очередь"
+        }
+    else:
+        return {
+            "status": "error",
+            "detail": res
+        }
+
 @videojet_router.get("/status")
-async def check_ver(ip: str):
+async def get_status(ip: str):
     driver = VideojetIndustrialDriver(ip, 3002)
     res = driver.get_status()
     return (res)
 
-@videojet_router.get("/capacity")
-async def check_ver(ip: str):
+
+@videojet_router.post("/reset_and_start")
+async def reset_and_start(ip: str):
     driver = VideojetIndustrialDriver(ip, 3002)
-    res = driver.get_capacity()
-    return (res)
+
+    # 1. Смотрим, на что жалуется
+    #faults = driver.get_faults()
+
+    # 2. Сбрасываем ошибки
+    driver.clear_faults()
+
+
+    return {
+        #"faults_before": faults,
+        "current_status": driver.get_status()
+    }
 
 
 # ==========================================
